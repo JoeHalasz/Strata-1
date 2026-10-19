@@ -1,0 +1,41 @@
+{
+  "generated": "2026-10-19 00:47",
+  "note": "Written by launcher/make_configs.py. Edit a model's base.json and re-run it.",
+  "models": [
+    {
+      "key": "iq3_s",
+      "label": "iq3_s",
+      "context": 131072,
+      "backend": "hip",
+      "vision": true,
+      "variants": [
+        "local",
+        "local-vision",
+        "online",
+        "online-vision"
+      ]
+    },
+    {
+      "key": "unsloth-ud-iq4_xs",
+      "label": "unsloth-ud-iq4_xs",
+      "context": 102400,
+      "backend": "hip",
+      "vision": false,
+      "variants": [
+        "local",
+        "online"
+      ]
+    },
+    {
+      "key": "unsloth-ud-q4_k_xl",
+      "label": "unsloth-ud-q4_k_xl",
+      "context": 102400,
+      "backend": "hip",
+      "vision": false,
+      "variants": [
+        "local",
+        "online"
+      ]
+    }
+  ]
+}
