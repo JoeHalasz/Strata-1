@@ -97,7 +97,7 @@ if (Test-Path $LastChoiceFile) {
 }
 
 $modelOptions = @($Catalog.models | ForEach-Object {
-    $v = if ($_.vision) { 'vision: yes' } else { 'vision: no  (no mmproj file next to the model)' }
+    $v = if ($_.vision) { 'vision: yes' } else { 'vision: no  (no image encoder: mmproj or strata-vision.exe)' }
     '{0,-22} {1,7} ctx   {2}' -f $_.label, $_.context, $v
 })
 $lastIndex = [Array]::IndexOf(@($Catalog.models.key), $Last[0])

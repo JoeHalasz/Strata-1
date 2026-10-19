@@ -7,7 +7,9 @@
 
     local    127.0.0.1 only (this PC); the browser opens when the model is ready
     online   0.0.0.0 (other devices on your network) + the SearXNG web-search MCP server
-    vision   --vision in the engine args + a "vision" section; needs mmproj-*.gguf next to the model
+    vision   --vision in the engine args + a "vision" section; needs an image encoder - mmproj-*.gguf
+          next to the model, or the "mmproj" key in its base.json naming one (one encoder serves
+          every quant of the same base model)
 
     Re-run it after editing a base.json, adding a configs/<model>/ folder, or downloading an mmproj:
 
@@ -40,8 +42,22 @@ def write(path, obj):
     path.write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
 
 
-def mmproj_for(native):
-    """The model's image encoder: mmproj-*.gguf sits next to the model's own GGUF."""
+def mmproj_for(native, override=None):
+    """The model's image encoder.
+
+    A base.json "mmproj" wins, because the encoder belongs to the BASE model and not to a quant:
+    every quant of Qwen3.8-Flash-Next can share one file.  Checked in the GGUF headers of the three
+    quants installed here - the projector writes clip.vision.projection_dim 2560, which is exactly
+    the qwen4exp.embedding_length of all three, and all three carry the same image_token_id
+    (248056), the same tokenizer pre-tokenizer (qwen35) and vision_start / vision_end / image_pad
+    in the chat template.  Their headers differ only in quantization provenance.
+
+    Without an override, mmproj-*.gguf next to the model's own GGUF is used - where setup puts it.
+    """
+    if override:
+        p = Path(override)
+        p = p if p.is_absolute() else ROOT / p
+        return str(p) if p.exists() else None
     if not native or not Path(native).exists():
         return None
     found = sorted(Path(native).parent.glob("mmproj*.gguf"))
@@ -72,7 +88,10 @@ def build(base, online, vision, mmproj, vision_exe):
         cfg["args"] = args
         v = dict(cfg.get("vision") or {})
         v.update({"exe": str(vision_exe), "mmproj": mmproj, "model": arg_value(args, "--native")})
-        v.setdefault("gpu", True)
+        # engine\strata-vision.exe here is the CPU build (build-vision-cpu.ps1, CUDA off - the exe holds
+        # no CUDA code at all).  True would add --gpu to the encoder and make the server hold 700 MiB of
+        # VRAM the encoder never touches.  Set it true in a base.json only beside a CUDA-built encoder.
+        v.setdefault("gpu", False)
         v.setdefault("max_tokens", 300)
         v.setdefault("threads", 16)
         cfg["vision"] = v
@@ -88,7 +107,7 @@ def main():
         return 1
     LOGS.mkdir(parents=True, exist_ok=True)
 
-    models, skipped = [], []
+    models, skipped, no_encoder = [], [], []
     for folder in sorted(p for p in CONFIGS.iterdir() if p.is_dir() and not p.name.startswith("_")):
         key, base_path = folder.name, folder / "base.json"
         if not base_path.exists():
@@ -97,8 +116,11 @@ def main():
         base = json.loads(base_path.read_text(encoding="utf-8-sig"))     # utf-8-sig: Notepad adds a BOM
         base["log"] = str(LOGS / f"strata-{key}.log")                     # logs go to logs/, not the root
 
-        mmproj = mmproj_for(arg_value(base.get("args") or [], "--native"))
+        mmproj = mmproj_for(arg_value(base.get("args") or [], "--native"), base.get("mmproj"))
+        base.pop("mmproj", None)                              # a note to this script, not a server setting
         can_vision = bool(mmproj and VISION_EXE.exists())
+        if not can_vision:
+            no_encoder.append(key)                            # could take pictures if an encoder were around
 
         wanted = {f"{key}--{name}.json" for name, _, vis in COMBOS if not vis or can_vision}
         for stale in folder.glob(f"{key}--*.json"):                       # a variant that no longer applies
@@ -130,6 +152,10 @@ def main():
                                     "models": models})
     for key in skipped:
         print(f"  skipped {key} (no base.json)", file=sys.stderr)
+    if no_encoder and VISION_EXE.exists():
+        print(f"\nno image encoder for: {', '.join(no_encoder)} - pictures are off for them.  An mmproj-*.gguf "
+              f"next to the model, or an \"mmproj\" path in its base.json pointing at one, turns them on.",
+              file=sys.stderr)
     print(f"\n{len(models)} model(s) in configs\\models.json.")
     return 0
 

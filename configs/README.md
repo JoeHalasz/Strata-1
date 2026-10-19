@@ -36,9 +36,24 @@ Only three keys differ between them, which is the whole difference between "loca
 With no `host` the server answers `127.0.0.1` only; `0.0.0.0` also answers the rest of your
 network, and the server then warns that no API key is set.
 
-The `-vision` variants are only written when both `mmproj-*.gguf` next to the model's GGUF and
-`engine\strata-vision.exe` exist. Right now that is `iq3_s` alone; the other two models get two
-variants each, and the launcher does not offer vision for them.
+The `-vision` variants are written when both an image encoder (`engine\strata-vision.exe`) and an
+`mmproj-*.gguf` are there. All three models installed here have both, so all three offer four
+variants.
+
+The encoder belongs to the base model and not to a quant, so one 866 MB file serves all three -
+the two Unsloth folders point at the one in `models\IQ3_S\` with `"mmproj"` in their `base.json`.
+The GGUF headers say why that is sound: the projector writes `clip.vision.projection_dim` 2560,
+which is the `qwen4exp.embedding_length` of every quant here, and all three carry the same
+`image_token_id` (248056), the same `tokenizer.ggml.pre` (`qwen35`), and `vision_start`,
+`vision_end` and `image_pad` in the chat template. Their headers differ only in who quantized them
+and what they calibrated on. Checked by running the encoder against each model: all three print
+`READY 2560` and encode a 448x192 picture to 84 tokens in 0.4 s.
+
+`engine\strata-vision.exe` here is the **CPU** build (`build-vision-cpu.ps1` - the AMD/HIP engine
+zip ships without an encoder, `engine\BUILD.json` says `"vision": "none"`, and the exe contains no
+CUDA code). So the `vision` section carries `"gpu": false`; with `true` the server would also hold
+700 MiB of VRAM the encoder never touches. Set it `true` in a `base.json` only beside a
+CUDA-built encoder.
 
 ## Changing something
 
@@ -52,13 +67,17 @@ applies (a model whose mmproj went away, say). `launcher\start.ps1` runs it by i
 
 Anything you put in a `base.json` is copied to all four variants, so that is where engine args,
 `sampling`, `env`, `lib_dirs` and your own MCP servers belong. Put `api_key` in a `base.json` to
-require it on every variant of that model.
+require it on every variant of that model. The one exception is `mmproj`: it tells the generator
+where the image encoder is, and it is written into the variants as `vision.mmproj` rather than
+left at the top level.
 
 ## Adding a model
 
 Make `configs\<name>\` and put a `base.json` in it - copy one and change `--pack`, `--native`,
-`--ple-gguf`, `tokenizer`, `model_name` and `--max-context`. `--native` is what the generator
-looks beside to find the mmproj. Re-run `make_configs.py` and it appears in the menu.
+`--ple-gguf`, `tokenizer`, `model_name` and `--max-context`. The generator looks beside `--native`
+for an `mmproj-*.gguf`; if the encoder lives elsewhere, add `"mmproj": "<path>"` - another model's
+copy is fine when both are quants of the same base model. Re-run `make_configs.py` and the model
+appears in the menu, with or without the two vision variants depending on what it found.
 
 `setup.py` writes its own `strata-<model>.json` in the project root. To bring one of those in,
 save it as `configs\<name>\base.json` and re-run the generator; the root copy is then redundant.

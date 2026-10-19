@@ -26,6 +26,7 @@
  ],
  "cwd": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata",
  "tokenizer": "C:\\Program Files (x86)\\Strata-data\\packs\\unsloth-ud-q4_k_xl\\tokenizer",
+ "mmproj": "C:\\Program Files (x86)\\Strata-data\\models\\IQ3_S\\mmproj-Qwen3.8-Flash-Next-BF16.gguf",
  "model_name": "qwen3.8-flash-next-unsloth-ud-q4_k_xl",
  "log": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\strata-unsloth-ud-q4_k_xl.log",
  "lib_dirs": [

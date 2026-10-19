@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-19 00:47",
+  "generated": "2026-10-19 01:25",
   "note": "Written by launcher/make_configs.py. Edit a model's base.json and re-run it.",
   "models": [
     {
@@ -20,10 +20,12 @@
       "label": "unsloth-ud-iq4_xs",
       "context": 102400,
       "backend": "hip",
-      "vision": false,
+      "vision": true,
       "variants": [
         "local",
-        "online"
+        "local-vision",
+        "online",
+        "online-vision"
       ]
     },
     {
@@ -31,10 +33,12 @@
       "label": "unsloth-ud-q4_k_xl",
       "context": 102400,
       "backend": "hip",
-      "vision": false,
+      "vision": true,
       "variants": [
         "local",
-        "online"
+        "local-vision",
+        "online",
+        "online-vision"
       ]
     }
   ]

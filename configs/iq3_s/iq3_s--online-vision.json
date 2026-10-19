@@ -59,7 +59,7 @@
     "exe": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\engine\\strata-vision.exe",
     "mmproj": "C:\\Program Files (x86)\\Strata-data\\models\\IQ3_S\\mmproj-Qwen3.8-Flash-Next-BF16.gguf",
     "model": "C:\\Program Files (x86)\\Strata-data\\models\\IQ3_S\\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
-    "gpu": true,
+    "gpu": false,
     "max_tokens": 300,
     "threads": 16
   }
