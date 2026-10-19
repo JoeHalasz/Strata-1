@@ -1,0 +1,41 @@
+{
+ "exe": "C:\\Program Files (x86)\\Strata\\engine\\strata.exe",
+ "args": [
+  "--pack",
+  "C:\\Program Files (x86)\\Strata-data\\packs\\unsloth-ud-iq4_xs",
+  "--native",
+  "C:\\Program Files (x86)\\Strata-data\\models\\unsloth-UD-IQ4_XS\\Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+  "--expert-profile",
+  "C:\\Program Files (x86)\\Strata\\data\\expert-profile.bin",
+  "--expert-cache",
+  "auto",
+  "--prefill",
+  "auto",
+  "--spec",
+  "4",
+  "--spec-min-p",
+  "0.5",
+  "--mtp",
+  "C:\\Program Files (x86)\\Strata-data\\mtp\\rt",
+  "--max-context",
+  "65536",
+  "--kv",
+  "int8",
+  "--kv-resident",
+  "32768",
+  "--resident-budget-gib",
+  "39"
+ ],
+ "cwd": "C:\\Program Files (x86)\\Strata",
+ "tokenizer": "C:\\Program Files (x86)\\Strata-data\\packs\\unsloth-ud-iq4_xs\\tokenizer",
+ "model_name": "qwen3.8-flash-next-unsloth-ud-iq4_xs",
+ "log": "C:\\Program Files (x86)\\Strata\\strata-unsloth-ud-iq4_xs.log",
+ "lib_dirs": [
+  "C:\\Program Files (x86)\\Strata\\engine\\rocm\\bin"
+ ],
+ "port": 8080,
+ "backend": "hip",
+ "env": {
+  "STRATA_HIPBLASLT_TUNING": "C:\\Program Files (x86)\\Strata\\tools\\hip\\gfx1201-hipblaslt-100500.txt"
+ }
+}
