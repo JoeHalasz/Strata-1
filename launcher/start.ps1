@@ -1,10 +1,11 @@
 <#
-    start.ps1 - the menu behind run-strata.bat: pick a model, online, vision. Nothing is asked again
-    on the next run: Enter takes the last choice. The configs are pre-written files (see
-    launcher\make_configs.py); this only reads one and starts the server in this window.
+    start.ps1 - the menu behind run-strata.bat: pick a model, online, vision, prompts at once. Nothing is
+    asked again on the next run: Enter takes the last choice. The configs are pre-written files (see
+    launcher\make_configs.py); this reads one and starts the server in this window.
 
     Switches to skip the menu (for shortcuts and scheduled starts):
         -Model iq3_s -Online -Vision      start that exact combination
+        -Parallel 3                       answer up to 3 prompts at once instead of one (1 = one at a time)
         -List                             just show what is available
         -Port 8090                        use another port instead of 8080
         -DryRun                           show what would start, then stop
@@ -15,6 +16,7 @@ param(
     [string]$Model,
     [switch]$Online,
     [switch]$Vision,
+    [int]$Parallel,       # not given = ask; 1 = one at a time; 2 or more = that many prompts decoded together
     [switch]$List,
     [switch]$DryRun,
     [switch]$NoRefresh,
@@ -57,6 +59,27 @@ function Read-Choice([string]$Title, [string[]]$Options, [int]$Default) {
     }
 }
 
+# ---------------------------------------------------------------- several prompts at once (docs\BATCHING.md)
+# "parallel": N in the engine config is what the server reads (serve\server.py -> the engine's --batch N): up to
+# N conversations decode together and the rest wait their turn. 1 or no key at all: one at a time, as before.
+# The pre-written configs are never edited - a number other than the chosen config's own gets a small file next
+# to it (<model>--<variant>--pN.json), rewritten from that config on every start. It can therefore never go stale,
+# and a configs refresh is free to delete it: the next start writes it again.
+$ParallelMax     = 8              # serve\server.py PARALLEL_MAX: the engine's batch window holds at most 8
+$ParallelChoices = @(1, 2, 3, 4, 6, 8)
+
+function Set-ParallelSlots([string]$ConfigPath, [int]$Slots) {
+    $Config   = [System.IO.File]::ReadAllText($ConfigPath) | ConvertFrom-Json
+    $InConfig = if ($Config.PSObject.Properties['parallel']) { [int] $Config.parallel } else { 1 }
+    if ($InConfig -eq $Slots) { return $ConfigPath }        # the config already says what is wanted
+    if ($Slots -le 1) { $Config.PSObject.Properties.Remove('parallel') }
+    else { $Config | Add-Member -Force -NotePropertyName parallel -NotePropertyValue $Slots }
+    $Derived = Join-Path (Split-Path -Parent $ConfigPath) ("{0}--p{1}.json" -f `
+               [System.IO.Path]::GetFileNameWithoutExtension($ConfigPath), $Slots)
+    [System.IO.File]::WriteAllText($Derived, ($Config | ConvertTo-Json -Depth 100))
+    return $Derived
+}
+
 # ---------------------------------------------------------------- the configs are pre-written; refresh if a base.json changed
 function Test-ConfigsStale {
     if (-not (Test-Path $ModelsFile)) { return $true }
@@ -89,11 +112,12 @@ if ($List) {
     exit 0
 }
 
-# ---------------------------------------------------------------- the three questions
-$Last = @('', '0', '0')
+# ---------------------------------------------------------------- the four questions
+$Last = @('', '0', '0', '1')
 if (Test-Path $LastChoiceFile) {
     $Last = (Get-Content $LastChoiceFile -First 1).Trim() -split '\|'
-    if ($Last.Count -lt 3) { $Last = @('', '0', '0') }
+    if ($Last.Count -lt 3) { $Last = @('', '0', '0', '1') }
+    if ($Last.Count -eq 3) { $Last += '1' }        # a file written before the prompts-at-once question existed
 }
 
 $modelOptions = @($Catalog.models | ForEach-Object {
@@ -128,12 +152,37 @@ elseif (-not $PSBoundParameters.ContainsKey('Vision')) {
                               @('no', 'yes') $(if ($Last[2] -eq '1') { 2 } else { 1 })) -eq 2
 }
 
+# how many prompts are answered at the same time: "parallel" in the config -> the engine's --batch N
+$wantParallel = 0
+if ($PSBoundParameters.ContainsKey('Parallel')) {
+    $wantParallel = [Math]::Max(1, $Parallel)
+}
+else {
+    $lastParallel = 1
+    [int]::TryParse(([string] $Last[3]).Trim(), [ref] $lastParallel) | Out-Null
+    $pDefault = [Array]::IndexOf($ParallelChoices, [Math]::Max(1, $lastParallel))
+    if ($pDefault -lt 0) { $pDefault = 0 }
+    $parallelOptions = @($ParallelChoices | ForEach-Object {
+        if ($_ -eq 1) { 'one at a time - the others wait their turn' } else { '{0} at once' -f $_ }
+    })
+    $pTitle = 'Prompts to answer at the same time? (several users or agents at once - docs\BATCHING.md)'
+    $wantParallel = $ParallelChoices[(Read-Choice $pTitle $parallelOptions ($pDefault + 1)) - 1]
+}
+if ($wantParallel -gt $ParallelMax) {
+    Write-Host "`nthe engine runs at most $ParallelMax prompts together: it will use $ParallelMax, you asked for $wantParallel." -ForegroundColor Yellow
+}
+if ($wantParallel -gt 1) {
+    Write-Host 'each one takes VRAM from the expert cache and costs about 10-25% speed per answer.' -ForegroundColor DarkGray
+    Write-Host 'more, --batch-mtp included: docs\BATCHING.md' -ForegroundColor DarkGray
+}
+
 $variant = $(if ($wantOnline) { 'online' } else { 'local' }) + $(if ($wantVision) { '-vision' } else { '' })
 $ChosenConfig = Join-Path $Configs "$($chosen.key)\$($chosen.key)--$variant.json"
 if (-not (Test-Path $ChosenConfig)) {
     Die "$ChosenConfig does not exist.`nThis model offers: $(@($chosen.variants) -join ', ')"
 }
-Set-Content -Path $LastChoiceFile -Value "$($chosen.key)|$([int] $wantOnline)|$([int] $wantVision)" -Encoding ASCII
+$ChosenConfig = Set-ParallelSlots $ChosenConfig $wantParallel
+Set-Content -Path $LastChoiceFile -Value "$($chosen.key)|$([int] $wantOnline)|$([int] $wantVision)|$wantParallel" -Encoding ASCII
 
 $serverArgs = @('--engine', 'strata', '--config', $ChosenConfig, '--port', "$Port")
 if (-not $wantOnline) { $serverArgs += '--open' }   # online opens from the phone; local opens the browser here
@@ -142,6 +191,7 @@ if ($DryRun) {
     Write-Host "`nwould run: `"$Py`" `"$Server`" $($serverArgs -join ' ')"
     Write-Host "would listen: $(if ($wantOnline) { "0.0.0.0:$Port (your whole network)" } else { "127.0.0.1:$Port (this PC only)" })"
     Write-Host "vision: $(if ($wantVision) { 'on' } else { 'off' })   Docker + SearXNG: $(if ($wantOnline) { 'yes' } else { 'no' })"
+    Write-Host "prompts at once: $wantParallel$(if ($wantParallel -gt 1) { " (the engine's batch slots, docs\BATCHING.md)" })"
     exit 0
 }
 
@@ -238,6 +288,7 @@ $Host.UI.RawUI.WindowTitle = "Strata - $($chosen.label) ($variant)"
 
 Write-Host "`n=== Strata: $($chosen.label) - $variant ===" -ForegroundColor Cyan
 Write-Host "  config   $ChosenConfig"
+Write-Host "  prompts  $(if ($wantParallel -le 1) { 'one at a time (the others wait their turn)' } else { "$wantParallel at once (engine batch slots)" })"
 if ($wantOnline) {
     $ips = @((Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
               Where-Object { $_.IPAddress -notlike '127.*' -and $_.PrefixOrigin -ne 'WellKnown' }).IPAddress)
