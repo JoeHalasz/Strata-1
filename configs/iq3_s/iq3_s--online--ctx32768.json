@@ -1,0 +1,57 @@
+{
+    "exe":  "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\engine\\strata.exe",
+    "cwd":  "C:\\Users\\jhala\\OneDrive\\Documents\\Strata",
+    "tokenizer":  "C:\\Program Files (x86)\\Strata-data\\packs\\iq3_s\\tokenizer",
+    "model_name":  "qwen3.8-flash-next-iq3_s",
+    "log":  "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\logs\\strata-iq3_s.log",
+    "lib_dirs":  [
+                     "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\engine\\rocm\\bin"
+                 ],
+    "port":  8080,
+    "backend":  "hip",
+    "env":  {
+                "STRATA_HIPBLASLT_TUNING":  "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\tools\\hip\\gfx1201-hipblaslt-100500.txt"
+            },
+    "mcp_servers":  {
+                        "searxng":  {
+                                        "command":  "npx",
+                                        "args":  [
+                                                     "-y",
+                                                     "mcp-searxng"
+                                                 ],
+                                        "env":  {
+                                                    "SEARXNG_URL":  "http://127.0.0.1:8888"
+                                                }
+                                    }
+                    },
+    "mcp":  {
+                "timeout_s":  60,
+                "max_result_chars":  20000,
+                "max_rounds":  8
+            },
+    "host":  "0.0.0.0",
+    "args":  [
+                 "--pack",
+                 "C:\\Program Files (x86)\\Strata-data\\packs\\iq3_s",
+                 "--native",
+                 "C:\\Program Files (x86)\\Strata-data\\models\\IQ3_S\\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+                 "--ple-gguf",
+                 "C:\\Program Files (x86)\\Strata-data\\models\\IQ3_S\\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+                 "--expert-profile",
+                 "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\data\\expert-profile.bin",
+                 "--expert-cache",
+                 "auto",
+                 "--prefill",
+                 "auto",
+                 "--spec",
+                 "4",
+                 "--spec-min-p",
+                 "0.5",
+                 "--mtp",
+                 "C:\\Program Files (x86)\\Strata-data\\mtp\\rt",
+                 "--max-context",
+                 "32768",
+                 "--kv",
+                 "int8"
+             ]
+}

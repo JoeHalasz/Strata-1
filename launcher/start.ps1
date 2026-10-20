@@ -1,10 +1,12 @@
 <#
-    start.ps1 - the menu behind run-strata.bat: pick a model, online, vision, prompts at once. Nothing is
-    asked again on the next run: Enter takes the last choice. The configs are pre-written files (see
-    launcher\make_configs.py); this reads one and starts the server in this window.
+    start.ps1 - the menu behind run-strata.bat: pick a model, online, vision, context, prompts at once. Nothing is
+    asked again on the next run: Enter takes the last choice (the context is remembered per model, in
+    launcher\.last-context). The configs are pre-written files (see launcher\make_configs.py); this reads one and
+    starts the server in this window.
 
     Switches to skip the menu (for shortcuts and scheduled starts):
         -Model iq3_s -Online -Vision      start that exact combination
+        -Context 65536                    one prompt sees that many tokens (64k and 65536 are the same)
         -Parallel 3                       answer up to 3 prompts at once instead of one (1 = one at a time)
         -List                             just show what is available
         -Port 8090                        use another port instead of 8080
@@ -17,6 +19,7 @@ param(
     [switch]$Online,
     [switch]$Vision,
     [int]$Parallel,       # not given = ask; 1 = one at a time; 2 or more = that many prompts decoded together
+    [string]$Context,     # not given = ask; tokens or k, so 65536 and 64k are the same thing
     [switch]$List,
     [switch]$DryRun,
     [switch]$NoRefresh,
@@ -29,6 +32,7 @@ $Configs        = Join-Path $ROOT 'configs'
 $ModelsFile     = Join-Path $Configs 'models.json'
 $MakeConfigs    = Join-Path $PSScriptRoot 'make_configs.py'
 $LastChoiceFile = Join-Path $PSScriptRoot '.last-choice'
+$ContextFile    = Join-Path $PSScriptRoot '.last-context'   # the context last used, one line per model
 $Py             = Join-Path $ROOT '.venv\Scripts\python.exe'
 $Server         = Join-Path $ROOT 'serve\server.py'
 $Notifier       = Join-Path $ROOT 'StrataStatusNotifier.ps1'
@@ -62,20 +66,102 @@ function Read-Choice([string]$Title, [string[]]$Options, [int]$Default) {
 # ---------------------------------------------------------------- several prompts at once (docs\BATCHING.md)
 # "parallel": N in the engine config is what the server reads (serve\server.py -> the engine's --batch N): up to
 # N conversations decode together and the rest wait their turn. 1 or no key at all: one at a time, as before.
-# The pre-written configs are never edited - a number other than the chosen config's own gets a small file next
-# to it (<model>--<variant>--pN.json), rewritten from that config on every start. It can therefore never go stale,
-# and a configs refresh is free to delete it: the next start writes it again.
 $ParallelMax     = 8              # serve\server.py PARALLEL_MAX: the engine's batch window holds at most 8
 $ParallelChoices = @(1, 2, 3, 4, 6, 8)
 
-function Set-ParallelSlots([string]$ConfigPath, [int]$Slots) {
-    $Config   = [System.IO.File]::ReadAllText($ConfigPath) | ConvertFrom-Json
+# ---------------------------------------------------------------- how much one prompt can see
+# "--max-context" in the config's args is what the server reads (serve\server.py:779). The steps are setup.py's
+# CONTEXTS up to the trained length: past 262144 the engine needs rope scaling, which setup writes into the config
+# and this launcher never touches - so it warns instead of quietly adding it.
+$ContextSteps   = @(8192, 32768, 65536, 131072, 204800, 262144)
+$TrainedContext = 262144
+$ContextMin     = 1024            # below this an answer or a tool result can stop fitting mid-prompt
+
+# "65536", "65,536", "64k", "128K" -> the number of tokens; anything else -> 0, and the caller re-asks.
+function ConvertTo-Tokens([string]$Value) {
+    $t = $Value.Trim().ToLower().Replace(',', '').Replace('_', '').Replace(' ', '')
+    if ($t -notmatch '^([0-9]+)([km]?)$') { return 0 }
+    $n = [long] $Matches[1]
+    if ($Matches[2] -eq 'k') { $n *= 1024 } elseif ($Matches[2] -eq 'm') { $n *= 1048576 }
+    return [Math]::Min([long] ([int]::MaxValue - 1), $n)
+}
+
+# A typed number rather than a numbered list: Enter takes the default, anything unusable re-asks.
+function Read-ContextChoice([string]$Title, [int]$Default) {
+    Write-Host ''
+    Write-Host $Title -ForegroundColor Cyan
+    $steps = @($ContextSteps | ForEach-Object { '{0}k' -f ($_ / 1024) })
+    Write-Host ('  tokens or k (' + ($steps -join ', ') + '), or any number you like') -ForegroundColor DarkGray
+    while ($true) {
+        $answer = Read-Host ('  context [Enter = {0}]' -f $Default)
+        if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
+        $n = ConvertTo-Tokens $answer
+        if ($n -ge $ContextMin) { return [int] $n }
+        Write-Host "  that is not a context length - give tokens (65536) or k (64k), $ContextMin or more." -ForegroundColor Yellow
+    }
+}
+
+# What each model was last started with: launcher\.last-context, one "<model>|<tokens>" line each. It is per model
+# on purpose - a 12 GB card runs a big context on iq3_s and none on a bigger file.
+function Read-LastContexts {
+    $saved = @{}
+    if (Test-Path $ContextFile) {
+        foreach ($line in (Get-Content $ContextFile)) {
+            $parts = $line.Trim() -split '\|'
+            if ($parts.Count -eq 2) {
+                $n = 0
+                if ([int]::TryParse($parts[1].Trim(), [ref] $n) -and $n -ge $ContextMin) { $saved[$parts[0].Trim()] = $n }
+            }
+        }
+    }
+    return $saved
+}
+
+function Set-LastContext([string]$Key, [int]$Tokens) {
+    $saved = Read-LastContexts
+    $saved[$Key] = $Tokens
+    $lines = @($saved.GetEnumerator() | Sort-Object Key | ForEach-Object { '{0}|{1}' -f $_.Key, $_.Value })
+    [System.IO.File]::WriteAllLines($ContextFile, $lines)
+}
+
+# The context setup wrote for this model: models.json's own, or base.json's when that is missing.
+function Get-OwnContext([string]$ModelKey) {
+    $base = Join-Path (Join-Path $Configs $ModelKey) 'base.json'
+    if (-not (Test-Path $base)) { return 0 }
+    $a = @((Read-JsonFile $base).args)
+    $i = [Array]::IndexOf($a, '--max-context')
+    if ($i -ge 0 -and $i -lt ($a.Count - 1)) { return [int] $a[$i + 1] }
+    return 0
+}
+
+# ---------------------------------------------------------------- the file the server is started with
+# The pre-written configs are never edited - a config that should say something else gets a small file next to it
+# (<model>--<variant>--p2--ctx65536.json), rewritten from that config on every start. It can therefore never go
+# stale, and a configs refresh is free to delete it: the next start writes it again.
+function Set-EngineOverrides([string]$ConfigPath, [int]$Slots, [int]$Tokens) {
+    $Config  = [System.IO.File]::ReadAllText($ConfigPath) | ConvertFrom-Json
+    $Changes = @()
+
     $InConfig = if ($Config.PSObject.Properties['parallel']) { [int] $Config.parallel } else { 1 }
-    if ($InConfig -eq $Slots) { return $ConfigPath }        # the config already says what is wanted
-    if ($Slots -le 1) { $Config.PSObject.Properties.Remove('parallel') }
-    else { $Config | Add-Member -Force -NotePropertyName parallel -NotePropertyValue $Slots }
-    $Derived = Join-Path (Split-Path -Parent $ConfigPath) ("{0}--p{1}.json" -f `
-               [System.IO.Path]::GetFileNameWithoutExtension($ConfigPath), $Slots)
+    if ($InConfig -ne $Slots) {                                    # 1 = no key at all, exactly as before
+        if ($Slots -le 1) { $Config.PSObject.Properties.Remove('parallel') }
+        else { $Config | Add-Member -Force -NotePropertyName parallel -NotePropertyValue $Slots }
+        $Changes += "p$Slots"
+    }
+
+    $ArgList = @($Config.args)
+    $At      = [Array]::IndexOf($ArgList, '--max-context')
+    $HasFlag = ($At -ge 0 -and $At -lt ($ArgList.Count - 1))
+    $InArgs  = if ($HasFlag) { [int] $ArgList[$At + 1] } else { 0 }
+    if ($InArgs -ne $Tokens) {
+        if ($HasFlag) { $ArgList[$At + 1] = "$Tokens" } else { $ArgList += @('--max-context', "$Tokens") }
+        $Config | Add-Member -Force -NotePropertyName args -NotePropertyValue $ArgList
+        $Changes += "ctx$Tokens"
+    }
+
+    if (-not $Changes) { return $ConfigPath }                      # this config already says what is wanted
+    $Derived = Join-Path (Split-Path -Parent $ConfigPath) ("{0}--{1}.json" -f `
+               [System.IO.Path]::GetFileNameWithoutExtension($ConfigPath), ($Changes -join '--'))
     [System.IO.File]::WriteAllText($Derived, ($Config | ConvertTo-Json -Depth 100))
     return $Derived
 }
@@ -103,12 +189,22 @@ else {
 $Catalog = Read-JsonFile $ModelsFile
 if (-not $Catalog.models -or -not @($Catalog.models).Count) { Die "No models listed in $ModelsFile" }
 $Catalog.models = @($Catalog.models)
+$SavedContext = Read-LastContexts          # the context each model was last started with: key -> tokens
+
+# The ctx column shows what a model will actually start with: the number you last used on it (marked *), else setup's own.
+function Format-ContextCell([object]$M) {
+    $saved = 0
+    if ($SavedContext.ContainsKey($M.key)) { $saved = $SavedContext[$M.key] }
+    if ($saved -gt 0 -and $saved -ne [int] $M.context) { return "$saved*" }
+    return "$($M.context)"
+}
 
 if ($List) {
     foreach ($m in $Catalog.models) {
         $v = if ($m.vision) { 'yes' } else { 'no' }
-        Write-Host ('  {0,-22} {1,7} ctx  {2}  vision {3}' -f $m.key, $m.context, $m.backend, $v)
+        Write-Host ('  {0,-22} {1,7} ctx  {2}  vision {3}' -f $m.key, (Format-ContextCell $m), $m.backend, $v)
     }
+    Write-Host '  (* = the context you last set for that model; the menu asks again and Enter keeps it)'
     exit 0
 }
 
@@ -122,7 +218,7 @@ if (Test-Path $LastChoiceFile) {
 
 $modelOptions = @($Catalog.models | ForEach-Object {
     $v = if ($_.vision) { 'vision: yes' } else { 'vision: no  (no image encoder: mmproj or strata-vision.exe)' }
-    '{0,-22} {1,7} ctx   {2}' -f $_.label, $_.context, $v
+    '{0,-22} {1,7} ctx   {2}' -f $_.label, (Format-ContextCell $_), $v
 })
 $lastIndex = [Array]::IndexOf(@($Catalog.models.key), $Last[0])
 if ($Model) {
@@ -131,7 +227,8 @@ if ($Model) {
     $chosen = @($picked)[0]
 }
 else {
-    $n = Read-Choice 'Model:' $modelOptions $(if ($lastIndex -ge 0) { $lastIndex + 1 } else { 1 })
+    $n = Read-Choice 'Model:  (* = the context you last set for it)' $modelOptions `
+                     $(if ($lastIndex -ge 0) { $lastIndex + 1 } else { 1 })
     $chosen = $Catalog.models[$n - 1]
 }
 
@@ -150,6 +247,40 @@ if (-not $chosen.vision) {
 elseif (-not $PSBoundParameters.ContainsKey('Vision')) {
     $wantVision = (Read-Choice 'Vision? (the model can read pictures you send it)' `
                               @('no', 'yes') $(if ($Last[2] -eq '1') { 2 } else { 1 })) -eq 2
+}
+
+# how much one prompt can see: "--max-context" in the config's args. What you last used is kept per model
+# (launcher\.last-context) and said out loud before asking, so Enter keeps it.
+$OwnContext = [int] $chosen.context
+if ($OwnContext -le 0) { $OwnContext = Get-OwnContext $chosen.key }
+if ($OwnContext -le 0) { Die "no --max-context for $($chosen.key): run `"$Py`" `"launcher\make_configs.py`"" }
+$LastContext = 0
+if ($SavedContext.ContainsKey($chosen.key)) { $LastContext = $SavedContext[$chosen.key] }
+if ($LastContext -gt 0) {
+    Write-Host "`n$($chosen.key): you last started it with $LastContext tokens of context (setup wrote $OwnContext for it)." -ForegroundColor Cyan
+}
+else {
+    Write-Host "`n$($chosen.key): context $OwnContext tokens, what setup wrote - you have not changed it on this model yet." -ForegroundColor Cyan
+}
+if ($PSBoundParameters.ContainsKey('Context')) {
+    $wantContext = ConvertTo-Tokens $Context
+    if ($wantContext -lt $ContextMin) {
+        Die "-Context `"$Context`" is not a context length: give tokens (65536) or k (64k), $ContextMin or more."
+    }
+}
+else {
+    $wantContext = Read-ContextChoice 'Context: how many tokens one prompt can see (the chat so far, files, tool output)' `
+                                 $(if ($LastContext -gt 0) { $LastContext } else { $OwnContext })
+}
+if ($wantContext -gt $TrainedContext) {
+    Write-Host "`n$wantContext is past the trained $TrainedContext positions: this launcher does not write rope scaling" -ForegroundColor Yellow
+    Write-Host "(setup adds --rope-scaling yarn for those), so answers past 256K are out of spec." -ForegroundColor Yellow
+}
+if ($wantContext -gt $OwnContext) {
+    Write-Host "a longer context takes VRAM from the expert cache: answers can be slower, and the start can run out of memory." -ForegroundColor DarkGray
+}
+if ($wantContext -lt 8192) {
+    Write-Host "under 8192, the shortest setup offers: a long chat or a big tool result may stop fitting." -ForegroundColor Yellow
 }
 
 # how many prompts are answered at the same time: "parallel" in the config -> the engine's --batch N
@@ -177,12 +308,13 @@ if ($wantParallel -gt 1) {
 }
 
 $variant = $(if ($wantOnline) { 'online' } else { 'local' }) + $(if ($wantVision) { '-vision' } else { '' })
-$ChosenConfig = Join-Path $Configs "$($chosen.key)\$($chosen.key)--$variant.json"
-if (-not (Test-Path $ChosenConfig)) {
-    Die "$ChosenConfig does not exist.`nThis model offers: $(@($chosen.variants) -join ', ')"
+$BaseConfig = Join-Path $Configs "$($chosen.key)\$($chosen.key)--$variant.json"
+if (-not (Test-Path $BaseConfig)) {
+    Die "$BaseConfig does not exist.`nThis model offers: $(@($chosen.variants) -join ', ')"
 }
-$ChosenConfig = Set-ParallelSlots $ChosenConfig $wantParallel
+$ChosenConfig = Set-EngineOverrides $BaseConfig $wantParallel $wantContext
 Set-Content -Path $LastChoiceFile -Value "$($chosen.key)|$([int] $wantOnline)|$([int] $wantVision)|$wantParallel" -Encoding ASCII
+Set-LastContext $chosen.key $wantContext
 
 $serverArgs = @('--engine', 'strata', '--config', $ChosenConfig, '--port', "$Port")
 if (-not $wantOnline) { $serverArgs += '--open' }   # online opens from the phone; local opens the browser here
@@ -191,6 +323,7 @@ if ($DryRun) {
     Write-Host "`nwould run: `"$Py`" `"$Server`" $($serverArgs -join ' ')"
     Write-Host "would listen: $(if ($wantOnline) { "0.0.0.0:$Port (your whole network)" } else { "127.0.0.1:$Port (this PC only)" })"
     Write-Host "vision: $(if ($wantVision) { 'on' } else { 'off' })   Docker + SearXNG: $(if ($wantOnline) { 'yes' } else { 'no' })"
+    Write-Host "context: $wantContext tokens$(if ($wantContext -ne $OwnContext) { " (this config's own is $OwnContext)" })"
     Write-Host "prompts at once: $wantParallel$(if ($wantParallel -gt 1) { " (the engine's batch slots, docs\BATCHING.md)" })"
     exit 0
 }
@@ -288,6 +421,7 @@ $Host.UI.RawUI.WindowTitle = "Strata - $($chosen.label) ($variant)"
 
 Write-Host "`n=== Strata: $($chosen.label) - $variant ===" -ForegroundColor Cyan
 Write-Host "  config   $ChosenConfig"
+Write-Host "  context  $(if ($wantContext -ne $OwnContext) { "$wantContext tokens (this config's own $OwnContext)" } else { "$wantContext tokens" })"
 Write-Host "  prompts  $(if ($wantParallel -le 1) { 'one at a time (the others wait their turn)' } else { "$wantParallel at once (engine batch slots)" })"
 if ($wantOnline) {
     $ips = @((Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
