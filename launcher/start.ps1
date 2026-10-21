@@ -8,6 +8,7 @@
         -Model iq3_s -Online -Vision      start that exact combination
         -Context 65536                    one prompt sees that many tokens (64k and 65536 are the same)
         -Parallel 3                       answer up to 3 prompts at once instead of one (1 = one at a time)
+        -LogOutputFile logs\run.log       write the full server output (stdout+stderr) to that file too
         -List                             just show what is available
         -Port 8090                        use another port instead of 8080
         -DryRun                           show what would start, then stop
@@ -20,6 +21,7 @@ param(
     [switch]$Vision,
     [int]$Parallel,       # not given = ask; 1 = one at a time; 2 or more = that many prompts decoded together
     [string]$Context,     # not given = ask; tokens or k, so 65536 and 64k are the same thing
+    [string]$LogOutputFile, # optional: copy the full server output (stdout+stderr) into this file
     [switch]$List,
     [switch]$DryRun,
     [switch]$NoRefresh,
@@ -312,6 +314,22 @@ $BaseConfig = Join-Path $Configs "$($chosen.key)\$($chosen.key)--$variant.json"
 if (-not (Test-Path $BaseConfig)) {
     Die "$BaseConfig does not exist.`nThis model offers: $(@($chosen.variants) -join ', ')"
 }
+
+$ResolvedLogOutputFile = ''
+if ($PSBoundParameters.ContainsKey('LogOutputFile')) {
+    if ([string]::IsNullOrWhiteSpace($LogOutputFile)) {
+        Die '-LogOutputFile needs a file path, for example -LogOutputFile logs\run.log'
+    }
+    $ResolvedLogOutputFile = $LogOutputFile.Trim()
+    if (-not [System.IO.Path]::IsPathRooted($ResolvedLogOutputFile)) {
+        $ResolvedLogOutputFile = Join-Path $ROOT $ResolvedLogOutputFile
+    }
+    $logDir = Split-Path -Parent $ResolvedLogOutputFile
+    if (-not [string]::IsNullOrWhiteSpace($logDir) -and -not (Test-Path $logDir)) {
+        [System.IO.Directory]::CreateDirectory($logDir) | Out-Null
+    }
+}
+
 $ChosenConfig = Set-EngineOverrides $BaseConfig $wantParallel $wantContext
 Set-Content -Path $LastChoiceFile -Value "$($chosen.key)|$([int] $wantOnline)|$([int] $wantVision)|$wantParallel" -Encoding ASCII
 Set-LastContext $chosen.key $wantContext
@@ -325,6 +343,7 @@ if ($DryRun) {
     Write-Host "vision: $(if ($wantVision) { 'on' } else { 'off' })   Docker + SearXNG: $(if ($wantOnline) { 'yes' } else { 'no' })"
     Write-Host "context: $wantContext tokens$(if ($wantContext -ne $OwnContext) { " (this config's own is $OwnContext)" })"
     Write-Host "prompts at once: $wantParallel$(if ($wantParallel -gt 1) { " (the engine's batch slots, docs\BATCHING.md)" })"
+    if ($ResolvedLogOutputFile) { Write-Host "full output log: $ResolvedLogOutputFile" }
     exit 0
 }
 
@@ -434,6 +453,12 @@ else {
     Write-Host "  this PC only  http://127.0.0.1:$Port   (the browser opens when the model is ready)"
 }
 Write-Host "  vision: $(if ($wantVision) { 'on' } else { 'off' })   |   stop with Ctrl+C, or CustomStopScript.bat`n"
+if ($ResolvedLogOutputFile) { Write-Host "  full output log  $ResolvedLogOutputFile" }
 
-& $Py $Server @serverArgs
+if ($ResolvedLogOutputFile) {
+    & $Py $Server @serverArgs 2>&1 | Tee-Object -FilePath $ResolvedLogOutputFile -Append
+}
+else {
+    & $Py $Server @serverArgs
+}
 exit $LASTEXITCODE

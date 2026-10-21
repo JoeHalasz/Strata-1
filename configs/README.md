@@ -20,7 +20,8 @@ configs\
 `run-strata.bat` in the project root asks three questions - model, online, vision - and starts
 the server in that window. It remembers the last answer to each, so Enter three times repeats the
 last start. `run-strata.bat -List` shows the models; `-Model iq3_s -Online -Vision` skips the
-questions; `-DryRun` prints the command instead of running it.
+questions; `-DryRun` prints the command instead of running it; `-LogOutputFile logs\run.log`
+copies the full server output (stdout+stderr) to a file while still showing it in the window.
 
 ## The four variants
 
