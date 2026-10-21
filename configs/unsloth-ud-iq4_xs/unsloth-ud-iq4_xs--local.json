@@ -22,7 +22,13 @@
     "--kv",
     "int8",
     "--kv-resident",
-    "32768"
+    "32768",
+    "--adapt-async",
+    "1",
+    "--conversation-cache-mib",
+    "8192",
+    "--conversation-cache-slots",
+    "4"
   ],
   "cwd": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata",
   "tokenizer": "C:\\Program Files (x86)\\Strata-data\\packs\\unsloth-ud-iq4_xs\\tokenizer",
@@ -33,7 +39,9 @@
   ],
   "port": 8080,
   "env": {
-    "STRATA_HIPBLASLT_TUNING": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\tools\\hip\\gfx1201-hipblaslt-100500.txt"
+    "STRATA_HIPBLASLT_TUNING": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\tools\\hip\\gfx1201-hipblaslt-100500.txt",
+    "STRATA_PIN_BY_NEED": "1"
   },
+  "expert_profile_save": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\data\\expert-profile-learned-unsloth-ud-iq4_xs.bin",
   "backend": "hip"
 }
