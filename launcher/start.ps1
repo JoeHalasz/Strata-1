@@ -1,11 +1,12 @@
 <#
-    start.ps1 - the menu behind run-strata.bat: pick a model, online, vision, context, prompts at once. Nothing is
+    start.ps1 - the menu behind run-strata.bat: pick a model, online, internet search, vision, context, prompts at once. Nothing is
     asked again on the next run: Enter takes the last choice (the context is remembered per model, in
     launcher\.last-context). The configs are pre-written files (see launcher\make_configs.py); this reads one and
     starts the server in this window.
 
     Switches to skip the menu (for shortcuts and scheduled starts):
-        -Model iq3_s -Online -Vision      start that exact combination
+        -Model iq3_s -Online -InternetSearch -Vision  start that exact combination
+        -NoInternetSearch                 skip Docker + SearXNG and start without the search tool
         -Context 65536                    one prompt sees that many tokens (64k and 65536 are the same)
         -Parallel 3                       answer up to 3 prompts at once instead of one (1 = one at a time)
         -LogOutputFile logs\run.log       write the full server output (stdout+stderr) to that file too
@@ -18,6 +19,8 @@
 param(
     [string]$Model,
     [switch]$Online,
+    [switch]$InternetSearch,
+    [switch]$NoInternetSearch,
     [switch]$Vision,
     [int]$Parallel,       # not given = ask; 1 = one at a time; 2 or more = that many prompts decoded together
     [string]$Context,     # not given = ask; tokens or k, so 65536 and 64k are the same thing
@@ -140,7 +143,7 @@ function Get-OwnContext([string]$ModelKey) {
 # The pre-written configs are never edited - a config that should say something else gets a small file next to it
 # (<model>--<variant>--p2--ctx65536.json), rewritten from that config on every start. It can therefore never go
 # stale, and a configs refresh is free to delete it: the next start writes it again.
-function Set-EngineOverrides([string]$ConfigPath, [int]$Slots, [int]$Tokens) {
+function Set-EngineOverrides([string]$ConfigPath, [int]$Slots, [int]$Tokens, [bool]$EnableInternetSearch) {
     $Config  = [System.IO.File]::ReadAllText($ConfigPath) | ConvertFrom-Json
     $Changes = @()
 
@@ -159,6 +162,41 @@ function Set-EngineOverrides([string]$ConfigPath, [int]$Slots, [int]$Tokens) {
         if ($HasFlag) { $ArgList[$At + 1] = "$Tokens" } else { $ArgList += @('--max-context', "$Tokens") }
         $Config | Add-Member -Force -NotePropertyName args -NotePropertyValue $ArgList
         $Changes += "ctx$Tokens"
+    }
+
+    $hasMcpServers = $Config.PSObject.Properties['mcp_servers'] -and $null -ne $Config.mcp_servers
+    $hasSearxng    = $hasMcpServers -and $Config.mcp_servers.PSObject.Properties['searxng']
+    if ($EnableInternetSearch) {
+        if (-not $hasMcpServers) {
+            $Config | Add-Member -Force -NotePropertyName mcp_servers -NotePropertyValue ([PSCustomObject]@{})
+            $hasMcpServers = $true
+            $hasSearxng = $false
+        }
+        if (-not $hasSearxng) {
+            $Config.mcp_servers | Add-Member -Force -NotePropertyName searxng -NotePropertyValue ([PSCustomObject]@{
+                command = 'npx'
+                args    = @('-y', 'mcp-searxng')
+                env     = [PSCustomObject]@{
+                    SEARXNG_URL = $SearxngUrl
+                }
+            })
+            $Changes += 'search-on'
+        }
+        if (-not $Config.PSObject.Properties['mcp']) {
+            $Config | Add-Member -Force -NotePropertyName mcp -NotePropertyValue ([PSCustomObject]@{
+                timeout_s        = 60
+                max_result_chars = 20000
+                max_rounds       = 8
+            })
+            if (-not ($Changes -contains 'search-on')) { $Changes += 'search-on' }
+        }
+    }
+    elseif ($hasSearxng) {
+        $Config.mcp_servers.PSObject.Properties.Remove('searxng')
+        if (($Config.mcp_servers.PSObject.Properties | Measure-Object).Count -eq 0) {
+            $Config.PSObject.Properties.Remove('mcp_servers')
+        }
+        $Changes += 'search-off'
     }
 
     if (-not $Changes) { return $ConfigPath }                      # this config already says what is wanted
@@ -210,12 +248,13 @@ if ($List) {
     exit 0
 }
 
-# ---------------------------------------------------------------- the four questions
-$Last = @('', '0', '0', '1')
+# ---------------------------------------------------------------- the questions
+$Last = @('', '0', '0', '1', '1')
 if (Test-Path $LastChoiceFile) {
     $Last = (Get-Content $LastChoiceFile -First 1).Trim() -split '\|'
     if ($Last.Count -lt 3) { $Last = @('', '0', '0', '1') }
     if ($Last.Count -eq 3) { $Last += '1' }        # a file written before the prompts-at-once question existed
+    if ($Last.Count -eq 4) { $Last += $(if ($Last[1] -eq '1') { '1' } else { '0' }) }
 }
 
 $modelOptions = @($Catalog.models | ForEach-Object {
@@ -235,12 +274,22 @@ else {
 }
 
 $wantOnline = [bool] $Online
+$wantInternetSearch = [bool] $InternetSearch
 $wantVision = [bool] $Vision
+if ($PSBoundParameters.ContainsKey('InternetSearch') -and $PSBoundParameters.ContainsKey('NoInternetSearch')) {
+    Die 'Use either -InternetSearch or -NoInternetSearch, not both.'
+}
+if ($PSBoundParameters.ContainsKey('NoInternetSearch')) { $wantInternetSearch = $false }
 if (-not $PSBoundParameters.ContainsKey('Online')) {
     # [bool]"0" is $true in PowerShell - compare the saved text, do not cast it.
-    $wantOnline = (Read-Choice 'Reachable from other devices on your network, with web search? (starts Docker + SearXNG)' `
-                               @('no  - this PC only', 'yes - listen on 0.0.0.0, start Docker + SearXNG') `
+    $wantOnline = (Read-Choice 'Reachable from other devices on your network?' `
+                               @('no  - this PC only', 'yes - listen on 0.0.0.0') `
                                $(if ($Last[1] -eq '1') { 2 } else { 1 })) -eq 2
+}
+if (-not ($PSBoundParameters.ContainsKey('InternetSearch') -or $PSBoundParameters.ContainsKey('NoInternetSearch'))) {
+    $wantInternetSearch = (Read-Choice 'Internet search tool? (uses Docker + SearXNG)' `
+                                      @('off - skip Docker + SearXNG startup', 'on  - start Docker + SearXNG for web search') `
+                                      $(if ($Last[4] -eq '1') { 2 } else { 1 })) -eq 2
 }
 if (-not $chosen.vision) {
     if ($wantVision) { Write-Host "`n$($chosen.label) has no image encoder (mmproj) - starting without vision." -ForegroundColor Yellow }
@@ -330,8 +379,8 @@ if ($PSBoundParameters.ContainsKey('LogOutputFile')) {
     }
 }
 
-$ChosenConfig = Set-EngineOverrides $BaseConfig $wantParallel $wantContext
-Set-Content -Path $LastChoiceFile -Value "$($chosen.key)|$([int] $wantOnline)|$([int] $wantVision)|$wantParallel" -Encoding ASCII
+$ChosenConfig = Set-EngineOverrides $BaseConfig $wantParallel $wantContext $wantInternetSearch
+Set-Content -Path $LastChoiceFile -Value "$($chosen.key)|$([int] $wantOnline)|$([int] $wantVision)|$wantParallel|$([int] $wantInternetSearch)" -Encoding ASCII
 Set-LastContext $chosen.key $wantContext
 
 $serverArgs = @('--engine', 'strata', '--config', $ChosenConfig, '--port', "$Port")
@@ -340,7 +389,7 @@ if (-not $wantOnline) { $serverArgs += '--open' }   # online opens from the phon
 if ($DryRun) {
     Write-Host "`nwould run: `"$Py`" `"$Server`" $($serverArgs -join ' ')"
     Write-Host "would listen: $(if ($wantOnline) { "0.0.0.0:$Port (your whole network)" } else { "127.0.0.1:$Port (this PC only)" })"
-    Write-Host "vision: $(if ($wantVision) { 'on' } else { 'off' })   Docker + SearXNG: $(if ($wantOnline) { 'yes' } else { 'no' })"
+    Write-Host "vision: $(if ($wantVision) { 'on' } else { 'off' })   internet search: $(if ($wantInternetSearch) { 'on (Docker + SearXNG)' } else { 'off' })"
     Write-Host "context: $wantContext tokens$(if ($wantContext -ne $OwnContext) { " (this config's own is $OwnContext)" })"
     Write-Host "prompts at once: $wantParallel$(if ($wantParallel -gt 1) { " (the engine's batch slots, docs\BATCHING.md)" })"
     if ($ResolvedLogOutputFile) { Write-Host "full output log: $ResolvedLogOutputFile" }
@@ -375,10 +424,10 @@ function Wait-Until([scriptblock]$Ready, [int]$Seconds, [string]$What) {
     return (& $Ready)
 }
 
-if ($wantOnline) {
+if ($wantInternetSearch) {
     Write-Host "`n--- web search: Docker + SearXNG ---" -ForegroundColor Cyan
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-        Die 'Docker is not installed. Install Docker Desktop, or answer "no" to the online question.'
+        Die 'Docker is not installed. Install Docker Desktop, or turn internet search off.'
     }
     if (-not (Test-DockerEngine)) {
         if (-not (Test-Path $DockerExe)) { Die "Docker Desktop not found: $DockerExe" }
@@ -442,6 +491,7 @@ Write-Host "`n=== Strata: $($chosen.label) - $variant ===" -ForegroundColor Cyan
 Write-Host "  config   $ChosenConfig"
 Write-Host "  context  $(if ($wantContext -ne $OwnContext) { "$wantContext tokens (this config's own $OwnContext)" } else { "$wantContext tokens" })"
 Write-Host "  prompts  $(if ($wantParallel -le 1) { 'one at a time (the others wait their turn)' } else { "$wantParallel at once (engine batch slots)" })"
+Write-Host "  internet search: $(if ($wantInternetSearch) { 'on (Docker + SearXNG)' } else { 'off (no Docker/SearXNG startup)' })"
 if ($wantOnline) {
     $ips = @((Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
               Where-Object { $_.IPAddress -notlike '127.*' -and $_.PrefixOrigin -ne 'WellKnown' }).IPAddress)
