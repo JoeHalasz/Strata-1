@@ -62,3 +62,4 @@ build-vision-cuda12.bat
 /.ccache/
 /.rocm-win/
 launcher/.last-choice
+launcher/.last-choice
