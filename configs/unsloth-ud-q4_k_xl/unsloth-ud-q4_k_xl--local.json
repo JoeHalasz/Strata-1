@@ -44,5 +44,13 @@
   },
   "expert_profile_save": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\data\\expert-profile-learned-unsloth-ud-q4_k_xl.bin",
   "fit_max_tokens": true,
-  "backend": "hip"
+  "backend": "hip",
+  "mcp_servers": {
+    "screenshot": {
+      "command": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\.venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\tools\\screenshot_mcp.py"
+      ]
+    }
+  }
 }

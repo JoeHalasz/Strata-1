@@ -14,19 +14,32 @@
           "name": "Strata: qwen3.8-flash-next-iq3_s",
           "modelID": "qwen3.8-flash-next-iq3_s",
           "limit": {
-            "context": 102400,
+            "context": 100352,
             "output": 32768
           },
           "capabilities": {
             "tools": true,
             "input": [
-              "text"
+              "text",
+              "image"
             ],
             "output": [
               "text"
             ]
           }
         }
+      }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "screenshot": {
+        "type": "local",
+        "command": [
+          "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\.venv\\Scripts\\python.exe",
+          "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\tools\\screenshot_mcp.py"
+        ],
+        "cwd": "."
       }
     }
   }

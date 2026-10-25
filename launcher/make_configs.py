@@ -7,6 +7,7 @@
 
     local    127.0.0.1 only (this PC); the browser opens when the model is ready
     online   0.0.0.0 (other devices on your network) + the SearXNG web-search MCP server
+    all      + the screenshot MCP server (tools/screenshot_mcp.py - no daemon, no network)
     vision   --vision in the engine args + a "vision" section; needs an image encoder - mmproj-*.gguf
           next to the model, or the "mmproj" key in its base.json naming one (one encoder serves
           every quant of the same base model)
@@ -30,6 +31,9 @@ COMBOS = [("local", False, False), ("local-vision", False, True),
           ("online", True, False), ("online-vision", True, True)]
 
 SEARXNG = {"command": "npx", "args": ["-y", "mcp-searxng"], "env": {"SEARXNG_URL": "http://127.0.0.1:8888"}}
+# Screenshots need no daemon and no network (tools/screenshot_mcp.py, standard library only), so
+# every variant gets it, local included - unlike searxng, which is the online half of the switch.
+SCREENSHOT = {"command": sys.executable, "args": [str(ROOT / "tools" / "screenshot_mcp.py")]}
 MCP = {"timeout_s": 60, "max_result_chars": 20000, "max_rounds": 8}
 
 
@@ -71,12 +75,14 @@ def build(base, online, vision, mmproj, vision_exe):
         cfg["host"] = "0.0.0.0"
         servers = dict(cfg.get("mcp_servers") or {})
         servers.setdefault("searxng", dict(SEARXNG))
+        servers.setdefault("screenshot", dict(SCREENSHOT))
         cfg["mcp_servers"] = servers
         cfg.setdefault("mcp", dict(MCP))
     else:
         cfg.pop("host", None)                             # the server's own default is 127.0.0.1
         servers = dict(cfg.get("mcp_servers") or {})
         servers.pop("searxng", None)                      # web search is the online half of this switch
+        servers.setdefault("screenshot", dict(SCREENSHOT))  # screenshots are local: every variant has them
         if servers:
             cfg["mcp_servers"] = servers
         else:

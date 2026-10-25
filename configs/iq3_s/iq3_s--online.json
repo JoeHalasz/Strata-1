@@ -55,6 +55,12 @@
       "env": {
         "SEARXNG_URL": "http://127.0.0.1:8888"
       }
+    },
+    "screenshot": {
+      "command": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\.venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\tools\\screenshot_mcp.py"
+      ]
     }
   },
   "mcp": {

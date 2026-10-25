@@ -41,6 +41,9 @@ td.log
 /build-cuda12/
 /.strata-mcp/
 
+# screenshots taken by tools/screenshot_mcp.py (they show the whole screen - keep them out of git)
+/screenshots/
+
 # image encoder (setup.py --vision): build output and the generated build script
 build-vision*/
 build-vision.bat

@@ -46,6 +46,14 @@
   },
   "expert_profile_save": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\data\\expert-profile-learned-iq3_s.bin",
   "fit_max_tokens": true,
+  "mcp_servers": {
+    "screenshot": {
+      "command": "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\.venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\jhala\\OneDrive\\Documents\\Strata\\tools\\screenshot_mcp.py"
+      ]
+    }
+  },
   "mcp": {
     "timeout_s": 60,
     "max_result_chars": 20000,

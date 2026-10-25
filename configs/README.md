@@ -33,6 +33,10 @@ Only three keys differ between them, which is the whole difference between "loca
 | online | `0.0.0.0` | added | absent |
 | *-vision | as above | as above | added |
 
+The screenshot MCP server (`mcp_servers.screenshot`, `tools\screenshot_mcp.py` - standard library
+only, no daemon, no network) is in all four variants, local included; `"disabled": true` in a
+`base.json` leaves it out of that model's.
+
 `host` is read by `serve\server.py` (`a.host = a.host or cfg.get("host") or "127.0.0.1"`).
 With no `host` the server answers `127.0.0.1` only; `0.0.0.0` also answers the rest of your
 network, and the server then warns that no API key is set.

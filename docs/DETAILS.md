@@ -1399,6 +1399,15 @@ it needs, prefer read-only tools, and don't add servers you don't trust. The too
 page itself (a request with another site's Origin or without a JSON content type is refused); if Strata is reachable
 from other devices, set an API key.
 
+**The screenshot server.** Every generated config carries `mcp_servers.screenshot` - `tools/screenshot_mcp.py`,
+standard library only, no daemon and no network: on Windows the capture is PowerShell's `CopyFromScreen`, on Linux
+grim / spectacle / gnome-screenshot / scrot / ImageMagick, on macOS `screencapture`. It offers `take_screenshot`
+(whole desktop, one monitor, or a region; the PNG also lands in `screenshots\`, git-ignored) and `list_displays`.
+Measured on this PC (Windows, 4 monitors, a 6400x2520 desktop): one full-desktop capture in 0.9 s, a 1.0 MB PNG;
+the chat page reads the text result (the picture itself is named, not shown - the vision section is what reads
+images). A screenshot shows everything on screen, so treat `screenshots\` as private. `"disabled": true` in a
+`base.json` turns it off for a model.
+
 **Context extension past 262K (rope scaling, EXPERIMENTAL, off unless you pick it).** The model was trained on
 262,144 positions (rotary base 1e7). Rope scaling rescales the rotation angles so that longer contexts stay usable,
 with llama.cpp's types and flag names. `linear` is Position Interpolation: every angle is shrunk by the factor.
