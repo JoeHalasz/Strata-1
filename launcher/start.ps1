@@ -1,15 +1,22 @@
 <#
-    start.ps1 - the menu behind run-strata.bat: pick a model, online, internet search, vision, context, prompts at once. Nothing is
+    start.ps1 - the menu behind run-strata.bat: pick a model, online, internet search, vision, context, prompts at once,
+    ntfy notifications. Nothing is
     asked again on the next run: Enter takes the last choice (the context is remembered per model, in
     launcher\.last-context). The configs are pre-written files (see launcher\make_configs.py); this reads one and
     starts the server in this window.
 
     Switches to skip the menu (for shortcuts and scheduled starts):
         -Model iq3_s -Online -InternetSearch -Vision  start that exact combination
+        -NoOnline                         answer the network question: this PC only (127.0.0.1)
+        -NoVision                         answer the vision question: no
         -NoInternetSearch                 skip Docker + SearXNG and start without the search tool
         -Context 65536                    one prompt sees that many tokens (64k and 65536 are the same)
         -Parallel 3                       answer up to 3 prompts at once instead of one (1 = one at a time)
         -LogOutputFile logs\run.log       write the full server output (stdout+stderr) to that file too
+        -Notifications off                answer the notifications question: no ntfy notices at all
+                                          (stops a notifier that is running)
+        -Notifications on                 answer the notifications question: the status notifier
+                                          always runs, even for a local-only start
         -List                             just show what is available
         -Port 8090                        use another port instead of 8080
         -DryRun                           show what would start, then stop
@@ -19,12 +26,15 @@
 param(
     [string]$Model,
     [switch]$Online,
+    [switch]$NoOnline,       # answer the network question: this PC only (the opposite of -Online)
     [switch]$InternetSearch,
     [switch]$NoInternetSearch,
     [switch]$Vision,
+    [switch]$NoVision,       # answer the vision question: no (the opposite of -Vision)
     [int]$Parallel,       # not given = ask; 1 = one at a time; 2 or more = that many prompts decoded together
     [string]$Context,     # not given = ask; tokens or k, so 65536 and 64k are the same thing
     [string]$LogOutputFile, # optional: copy the full server output (stdout+stderr) into this file
+    [string]$Notifications, # not given = ask; on = notifier always; off = never (and stop a running one)
     [switch]$List,
     [switch]$DryRun,
     [switch]$NoRefresh,
@@ -255,6 +265,7 @@ if (Test-Path $LastChoiceFile) {
     if ($Last.Count -lt 3) { $Last = @('', '0', '0', '1') }
     if ($Last.Count -eq 3) { $Last += '1' }        # a file written before the prompts-at-once question existed
     if ($Last.Count -eq 4) { $Last += $(if ($Last[1] -eq '1') { '1' } else { '0' }) }
+    if ($Last.Count -eq 5) { $Last += $(if ($Last[1] -eq '1') { '1' } else { '0' }) }   # written before the notifications question existed
 }
 
 $modelOptions = @($Catalog.models | ForEach-Object {
@@ -276,11 +287,18 @@ else {
 $wantOnline = [bool] $Online
 $wantInternetSearch = [bool] $InternetSearch
 $wantVision = [bool] $Vision
+if ($PSBoundParameters.ContainsKey('Online') -and $PSBoundParameters.ContainsKey('NoOnline')) {
+    Die 'Use either -Online or -NoOnline, not both.'
+}
+if ($PSBoundParameters.ContainsKey('Vision') -and $PSBoundParameters.ContainsKey('NoVision')) {
+    Die 'Use either -Vision or -NoVision, not both.'
+}
 if ($PSBoundParameters.ContainsKey('InternetSearch') -and $PSBoundParameters.ContainsKey('NoInternetSearch')) {
     Die 'Use either -InternetSearch or -NoInternetSearch, not both.'
 }
 if ($PSBoundParameters.ContainsKey('NoInternetSearch')) { $wantInternetSearch = $false }
-if (-not $PSBoundParameters.ContainsKey('Online')) {
+if ($PSBoundParameters.ContainsKey('NoOnline')) { $wantOnline = $false }
+elseif (-not $PSBoundParameters.ContainsKey('Online')) {
     # [bool]"0" is $true in PowerShell - compare the saved text, do not cast it.
     $wantOnline = (Read-Choice 'Reachable from other devices on your network?' `
                                @('no  - this PC only', 'yes - listen on 0.0.0.0') `
@@ -295,6 +313,7 @@ if (-not $chosen.vision) {
     if ($wantVision) { Write-Host "`n$($chosen.label) has no image encoder (mmproj) - starting without vision." -ForegroundColor Yellow }
     $wantVision = $false
 }
+elseif ($PSBoundParameters.ContainsKey('NoVision')) { $wantVision = $false }
 elseif (-not $PSBoundParameters.ContainsKey('Vision')) {
     $wantVision = (Read-Choice 'Vision? (the model can read pictures you send it)' `
                               @('no', 'yes') $(if ($Last[2] -eq '1') { 2 } else { 1 })) -eq 2
@@ -307,19 +326,23 @@ if ($OwnContext -le 0) { $OwnContext = Get-OwnContext $chosen.key }
 if ($OwnContext -le 0) { Die "no --max-context for $($chosen.key): run `"$Py`" `"launcher\make_configs.py`"" }
 $LastContext = 0
 if ($SavedContext.ContainsKey($chosen.key)) { $LastContext = $SavedContext[$chosen.key] }
-if ($LastContext -gt 0) {
-    Write-Host "`n$($chosen.key): you last started it with $LastContext tokens of context (setup wrote $OwnContext for it)." -ForegroundColor Cyan
-}
-else {
-    Write-Host "`n$($chosen.key): context $OwnContext tokens, what setup wrote - you have not changed it on this model yet." -ForegroundColor Cyan
-}
 if ($PSBoundParameters.ContainsKey('Context')) {
     $wantContext = ConvertTo-Tokens $Context
     if ($wantContext -lt $ContextMin) {
         Die "-Context `"$Context`" is not a context length: give tokens (65536) or k (64k), $ContextMin or more."
     }
+    # said out loud, because "the config's own 131072" read like it was still in charge when
+    # only the summary line mentioned it - this start's -Context is what the server gets.
+    $was = if ($LastContext -gt 0) { "you last used $LastContext" } else { "setup wrote $OwnContext" }
+    Write-Host "`n$($chosen.key): context $wantContext tokens as given ($was - this start overrides it)." -ForegroundColor Cyan
 }
 else {
+    if ($LastContext -gt 0) {
+        Write-Host "`n$($chosen.key): you last started it with $LastContext tokens of context (setup wrote $OwnContext for it)." -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "`n$($chosen.key): context $OwnContext tokens, what setup wrote - you have not changed it on this model yet." -ForegroundColor Cyan
+    }
     $wantContext = Read-ContextChoice 'Context: how many tokens one prompt can see (the chat so far, files, tool output)' `
                                  $(if ($LastContext -gt 0) { $LastContext } else { $OwnContext })
 }
@@ -358,6 +381,22 @@ if ($wantParallel -gt 1) {
     Write-Host 'more, --batch-mtp included: docs\BATCHING.md' -ForegroundColor DarkGray
 }
 
+# ---------------------------------------------------------------- ntfy notifications, all of them in one question
+# Every ntfy notice comes from the one background script (StrataStatusNotifier.ps1), so this one
+# question covers all of them. off also stops a notifier left running from an earlier start, so
+# off really means off. -Notifications on|off answers the question for shortcuts and scheduled starts.
+if ($PSBoundParameters.ContainsKey('Notifications')) {
+    $notif = $Notifications.Trim().ToLower()
+    if     ($notif -in @('on', 'yes', 'true', '1'))  { $wantNotifications = $true }
+    elseif ($notif -in @('off', 'no', 'false', '0')) { $wantNotifications = $false }
+    else { Die "-Notifications `"$Notifications`" means nothing: use on or off." }
+}
+else {
+    $wantNotifications = (Read-Choice 'ntfy notifications? (Strata up, idle and error notices to your phone)' `
+                                      @('off - no notifications', 'on  - the status notifier sends them') `
+                                      $(if ($Last[5] -eq '1') { 2 } else { 1 })) -eq 2
+}
+
 $variant = $(if ($wantOnline) { 'online' } else { 'local' }) + $(if ($wantVision) { '-vision' } else { '' })
 $BaseConfig = Join-Path $Configs "$($chosen.key)\$($chosen.key)--$variant.json"
 if (-not (Test-Path $BaseConfig)) {
@@ -380,7 +419,7 @@ if ($PSBoundParameters.ContainsKey('LogOutputFile')) {
 }
 
 $ChosenConfig = Set-EngineOverrides $BaseConfig $wantParallel $wantContext $wantInternetSearch
-Set-Content -Path $LastChoiceFile -Value "$($chosen.key)|$([int] $wantOnline)|$([int] $wantVision)|$wantParallel|$([int] $wantInternetSearch)" -Encoding ASCII
+Set-Content -Path $LastChoiceFile -Value "$($chosen.key)|$([int] $wantOnline)|$([int] $wantVision)|$wantParallel|$([int] $wantInternetSearch)|$([int] $wantNotifications)" -Encoding ASCII
 Set-LastContext $chosen.key $wantContext
 
 $serverArgs = @('--engine', 'strata', '--config', $ChosenConfig, '--port', "$Port")
@@ -390,9 +429,10 @@ if ($DryRun) {
     Write-Host "`nwould run: `"$Py`" `"$Server`" $($serverArgs -join ' ')"
     Write-Host "would listen: $(if ($wantOnline) { "0.0.0.0:$Port (your whole network)" } else { "127.0.0.1:$Port (this PC only)" })"
     Write-Host "vision: $(if ($wantVision) { 'on' } else { 'off' })   internet search: $(if ($wantInternetSearch) { 'on (Docker + SearXNG)' } else { 'off' })"
-    Write-Host "context: $wantContext tokens$(if ($wantContext -ne $OwnContext) { " (this config's own is $OwnContext)" })"
+    Write-Host "context: $wantContext tokens$(if ($wantContext -ne $OwnContext) { " (setup's own is $OwnContext, overridden by this start)" })"
     Write-Host "prompts at once: $wantParallel$(if ($wantParallel -gt 1) { " (the engine's batch slots, docs\BATCHING.md)" })"
     if ($ResolvedLogOutputFile) { Write-Host "full output log: $ResolvedLogOutputFile" }
+    Write-Host "ntfy notifications: $(if ($wantNotifications) { 'on (the status notifier)' } else { 'off (no status notifier)' })"
     exit 0
 }
 
@@ -464,8 +504,22 @@ if ($wantInternetSearch) {
     Write-Host "  [OK] SearXNG is answering at $SearxngUrl" -ForegroundColor Green
 }
 
-# ---------------------------------------------------------------- the status notifier (online runs, as before)
-if ($wantOnline -and (Test-Path $Notifier)) {
+# ---------------------------------------------------------------- the status notifier (the notifications
+# question above decides; off stops a notifier left running, so off really means off)
+if ($wantNotifications -eq $false) {
+    # off means off: a notifier still running from an earlier start would keep sending.
+    $running = @(Get-CimInstance Win32_Process | Where-Object {
+        $_.Name -eq 'powershell.exe' -and $_.CommandLine -like '*StrataStatusNotifier.ps1*'
+    })
+    if ($running.Count -gt 0) {
+        foreach ($p in $running) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+        Write-Host "  [OK] stopped the running status notifier ($($running.Count)) - notifications are off." -ForegroundColor Green
+    }
+    else {
+        Write-Host '  ntfy notifications: off (the status notifier will not start).' -ForegroundColor DarkGray
+    }
+}
+elseif ($wantNotifications -and (Test-Path $Notifier)) {
     $already = Get-CimInstance Win32_Process | Where-Object {
         $_.Name -eq 'powershell.exe' -and $_.CommandLine -like '*StrataStatusNotifier.ps1*'
     } | Select-Object -First 1
@@ -489,9 +543,10 @@ $Host.UI.RawUI.WindowTitle = "Strata - $($chosen.label) ($variant)"
 
 Write-Host "`n=== Strata: $($chosen.label) - $variant ===" -ForegroundColor Cyan
 Write-Host "  config   $ChosenConfig"
-Write-Host "  context  $(if ($wantContext -ne $OwnContext) { "$wantContext tokens (this config's own $OwnContext)" } else { "$wantContext tokens" })"
+Write-Host "  context  $(if ($wantContext -ne $OwnContext) { "$wantContext tokens (setup's own is $OwnContext, this start overrides it)" } else { "$wantContext tokens" })"
 Write-Host "  prompts  $(if ($wantParallel -le 1) { 'one at a time (the others wait their turn)' } else { "$wantParallel at once (engine batch slots)" })"
 Write-Host "  internet search: $(if ($wantInternetSearch) { 'on (Docker + SearXNG)' } else { 'off (no Docker/SearXNG startup)' })"
+Write-Host "  ntfy notifications: $(if ($wantNotifications) { 'on (the status notifier)' } else { 'off (no ntfy notices)' })"
 if ($wantOnline) {
     $ips = @((Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
               Where-Object { $_.IPAddress -notlike '127.*' -and $_.PrefixOrigin -ne 'WellKnown' }).IPAddress)

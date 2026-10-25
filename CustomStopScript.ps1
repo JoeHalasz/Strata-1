@@ -218,10 +218,17 @@ Stop-MatchProcess -Item "Strata engine" -Processes (
     Get-MatchProcess -Names @("strata.exe", "strata-device.exe")
 )
 
-# 4. The launcher console window, which waits at "Press any key" once the server ends.
+# 4. The launcher console window, however it was opened: an old run-*.bat shortcut, or a
+#    CustomStartScript.bat window (double-clicked, or the dashboard's "start "Strata" ..." window).
+#    Once the server dies that window waits at "Press any key", and a launcher still at its menu
+#    waits for an answer - the cmd window AND its start.ps1 powershell both have to go, or the
+#    window stays open. A window that is running this stop script itself is never touched.
 Write-Host "`nLauncher window..." -ForegroundColor Cyan
 Stop-MatchProcess -Item "Launcher window" -Processes (
-    Get-MatchProcess -Names @("cmd.exe") -CommandLike "*$StrataDir*run-*.bat*"
+    @(
+        Get-MatchProcess -Names @("cmd.exe") -CommandLike @("*$StrataDir*run-*.bat*", "*CustomStartScript*")
+        Get-MatchProcess -Names @("powershell.exe", "pwsh.exe") -CommandLike @("*-File*launcher\start.ps1*", "*-File*launcher/start.ps1*")
+    ) | Where-Object { $_.CommandLine -notlike "*CustomStopScript*" }
 )
 
 if ($DryRun) {
@@ -249,6 +256,11 @@ elseif (!(Get-Command docker -ErrorAction SilentlyContinue)) {
 elseif (!(Test-Path "$SearxngDir\docker-compose.yml")) {
     $script:Failures += 1
     Add-Result -Item "SearXNG" "no compose file in $SearxngDir" -Result "FAILED"
+}
+elseif (!(Test-Docker)) {
+    # no engine running: nothing of ours can be up, and docker ps would only fail loudly
+    # (search-off starts never bring Docker up, so this is the normal case for them).
+    Add-Result -Item "SearXNG" "docker engine not running" -Result "Skipped"
 }
 else {
     $Running = Invoke-Native -Exe "docker" `
