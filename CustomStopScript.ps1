@@ -173,6 +173,53 @@ function Stop-MatchProcess {
     }
 }
 
+function Stop-LeftoverStrataTrees {
+    if ($DryRun) {
+        Add-Result -Item "strata cleanup" -Detail "leftover tree scan" -Result "Would stop"
+        return
+    }
+
+    $IDs = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ProcessId -ne $PID -and
+            (
+                ($_.Name -in @('python.exe', 'pythonw.exe', 'python3.exe', 'strata.exe', 'strata-device.exe', 'cmd.exe', 'powershell.exe', 'pwsh.exe')) -and
+                (
+                    $_.CommandLine -like '*serve\server.py*' -or
+                    $_.CommandLine -like '*serve/server.py*' -or
+                    $_.CommandLine -like '*launcher\start.ps1*' -or
+                    $_.CommandLine -like '*launcher/start.ps1*' -or
+                    $_.CommandLine -like '*CustomStartScript*' -or
+                    $_.CommandLine -like '*run-*.bat*' -or
+                    $_.CommandLine -like '*strata.exe*' -or
+                    $_.CommandLine -like '*strata-device.exe*'
+                )
+            )
+        } |
+        Select-Object -ExpandProperty ProcessId |
+        Sort-Object -Unique
+    )
+
+    if ($IDs.Count -eq 0) {
+        Add-Result -Item "Strata cleanup" -Detail "no leftover trees" -Result "Skipped"
+        return
+    }
+
+    foreach ($PID in $IDs) {
+        Write-Host ("      PID {0,-6} forced tree kill" -f $PID)
+    }
+
+    try {
+        & taskkill.exe /PID ($IDs -join ',') /T /F 2>$null | Out-Null
+        Add-Result -Item "Strata cleanup" -Detail "$($IDs.Count) leftover process(es)" -Result "Stopped"
+    }
+    catch {
+        $script:Failures += 1
+        Add-Result -Item "Strata cleanup" -Detail "taskkill failed" -Result "FAILED"
+    }
+}
+
 function Wait-PortFree {
     param([int]$Port)
 
@@ -236,7 +283,14 @@ if ($DryRun) {
 else {
     Wait-PortFree -Port $StrataPort
 }
-# 5. SearXNG: "docker compose down" is the reverse of the start script's "up -d".
+# 5. Any leftover Strata process trees from a crashed or half-dead shutdown.
+#    This is the aggressive cleanup that catches child processes the server or
+#    launcher may have left behind when it was still starting or when a prior run
+#    ended without a clean exit path.
+Write-Host "`nStrata process tree cleanup..." -ForegroundColor Cyan
+Stop-LeftoverStrataTrees
+
+# 6. SearXNG: "docker compose down" is the reverse of the start script's "up -d".
 #    Named volumes (the search cache) are kept, so the next start is warm.
 Write-Host "`nSearXNG..." -ForegroundColor Cyan
 
