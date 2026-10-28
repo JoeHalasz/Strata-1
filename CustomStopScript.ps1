@@ -1,6 +1,6 @@
 # CustomStopScript.ps1
 # The opposite of CustomStartScript.ps1: closes everything that script leaves running.
-# Order is the reverse of the startup - notifier, Strata server, engine, launcher window,
+# Order is the reverse of the startup - Strata server, engine, launcher window,
 # SearXNG containers, Docker Desktop - and every step says what it found.
 # Windows PowerShell 5.1 compatible.
 
@@ -17,9 +17,8 @@ $ErrorActionPreference = "Stop"
 # Configuration - the same values CustomStartScript.ps1 uses.
 $SearxngDir = "$HOME\searxng"
 $SearxngPort = 8888
-$StrataDir = "$HOME\OneDrive\Documents\Strata"
+$StrataDir = "C:\Users\Saoirse\Documents\GitHub\Strata-1"
 $StrataPort = 8080
-$NotifierName = "StrataStatusNotifier.ps1"
 $KillWaitSeconds = 8
 $PortFreeWaitSeconds = 15
 $DockerStopTimeoutSeconds = 120
@@ -198,11 +197,6 @@ if ($DryRun) {
     Write-Host "DRY RUN - nothing will be stopped." -ForegroundColor Yellow
 }
 
-# 1. The status notifier first, so it can't alert while the server disappears.
-Write-Host "`nStatus notifier..." -ForegroundColor Cyan
-Stop-MatchProcess -Item "Notifier" -Processes (
-    Get-MatchProcess -Names @("powershell.exe", "pwsh.exe") -CommandLike "*$NotifierName*"
-)
 
 # 2. The server. .venv\Scripts\python.exe is a launcher, so the venv process and the
 #    real interpreter it started are both running and both have to go.
